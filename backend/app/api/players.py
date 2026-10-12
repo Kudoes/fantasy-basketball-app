@@ -47,6 +47,7 @@ def list_players(
         data.stats, pool_size=settings["num_teams"] * settings["rounds"], punts=punt_list, mode=value_mode
     )
 
+    positions = data.positions
     players = []
     for pid, row in values.sort_values("rank").iterrows():
         player = data.players[pid]
@@ -57,7 +58,7 @@ def list_players(
             "id": int(pid),
             "name": player.name,
             "team": player.team,
-            "positions": [p for p in player.positions.split(",") if p],
+            "positions": positions[pid],
             "injury_status": player.injury_status,
             "rank": int(row["rank"]),
             "value": round(float(row["value"]), 3),

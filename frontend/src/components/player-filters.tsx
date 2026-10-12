@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, type ReactNode } from "react"
 import { SearchIcon } from "lucide-react"
 
 import { Input } from "@/components/ui/input"
@@ -18,16 +18,28 @@ export function matchesFilters(
   return !search || fold(player.name).includes(fold(search.trim()))
 }
 
+/** 0 when a name word starts with the search ("jok" -> Jokic), 1 for any other match. */
+export function matchRank(name: string, search: string): number {
+  const q = fold(search.trim())
+  return fold(name).split(/[\s.'-]+/).some((word) => word.startsWith(q)) ? 0 : 1
+}
+
 export function PlayerFilters({
   search,
   onSearch,
   position,
   onPosition,
+  onSubmit,
+  hint,
 }: {
   search: string
   onSearch: (value: string) => void
   position: PositionFilter
   onPosition: (value: PositionFilter) => void
+  /** Called on Enter in the search box. */
+  onSubmit?: () => void
+  /** Shown next to the search box, e.g. what Enter will do. */
+  hint?: ReactNode
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -52,11 +64,18 @@ export function PlayerFilters({
           ref={inputRef}
           value={search}
           onChange={(e) => onSearch(e.target.value)}
-          onKeyDown={(e) => e.key === "Escape" && onSearch("")}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") onSearch("")
+            if (e.key === "Enter" && onSubmit) {
+              e.preventDefault()
+              onSubmit()
+            }
+          }}
           placeholder="Search players  /"
           className="h-8 w-52 pl-8"
         />
       </div>
+      {hint}
       <ToggleGroup
         type="single"
         variant="outline"

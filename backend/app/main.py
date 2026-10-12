@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import draft, league, players
+from app.api import draft, league, playbook, players
 from app.db import init_db
 from app.yahoo_sync import poll_draft_forever
 
@@ -26,6 +26,7 @@ app = FastAPI(title="Fantasy Basketball Assistant", lifespan=lifespan)
 app.include_router(players.router)
 app.include_router(draft.router)
 app.include_router(league.router)
+app.include_router(playbook.router)
 
 
 @app.get("/api/health")

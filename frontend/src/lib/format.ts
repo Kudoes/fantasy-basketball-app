@@ -59,3 +59,10 @@ export function lastSeasonSummary(line: StatLine | null, season: string): string
   if (!line) return `No ${season} NBA stats`
   return `${season}: ${line.gp} GP · ${line.pts.toFixed(1)} pts · ${line.reb.toFixed(1)} reb · ${line.ast.toFixed(1)} ast · ${fmtPct(line.fg_pct)} FG · ${fmtPct(line.ft_pct)} FT`
 }
+
+/** Snake draft: odd rounds go 1..N, even rounds N..1. */
+export function slotForPick(overall: number, numTeams: number): number {
+  const round = Math.floor((overall - 1) / numTeams)
+  const offset = (overall - 1) % numTeams
+  return round % 2 === 0 ? offset + 1 : numTeams - offset
+}

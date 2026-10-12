@@ -20,3 +20,7 @@ frontend/dist/
 
 # OS
 .DS_Store
+
+# Private draft strategy (the playbook is read from disk if present)
+compass_artifact_*.md
+backend/data/playbook.json

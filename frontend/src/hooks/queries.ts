@@ -20,6 +20,19 @@ export function useDraftState({ poll = true } = {}) {
   })
 }
 
+export function usePlaybook() {
+  return useQuery({ queryKey: ["playbook"], queryFn: api.playbook, staleTime: 5 * 60_000 })
+}
+
+export function useAddUnlistedPick() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, overall }: { name: string; overall?: number }) => api.addUnlistedPick(name, overall),
+    onError: showError,
+    onSettled: () => qc.invalidateQueries({ queryKey: ["draft"] }),
+  })
+}
+
 export function useLeague() {
   return useQuery({ queryKey: ["league"], queryFn: api.league })
 }
@@ -61,6 +74,31 @@ export function useRemovePick() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (overall: number) => api.removePick(overall),
+    onError: showError,
+    onSettled: () => qc.invalidateQueries({ queryKey: ["draft"] }),
+  })
+}
+
+export type PickEdit =
+  | { kind: "set" | "insert" | "replace"; overall: number; playerId: number }
+  | { kind: "remove"; overall: number; shift: boolean }
+
+/** Edits any pick on the board: fill a hole, insert a missed pick, replace or remove one. */
+export function useEditPick() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (edit: PickEdit): Promise<unknown> => {
+      switch (edit.kind) {
+        case "set":
+          return api.setPick(edit.overall, edit.playerId)
+        case "insert":
+          return api.setPick(edit.overall, edit.playerId, true)
+        case "replace":
+          return api.replacePick(edit.overall, edit.playerId)
+        case "remove":
+          return api.removePick(edit.overall, edit.shift)
+      }
+    },
     onError: showError,
     onSettled: () => qc.invalidateQueries({ queryKey: ["draft"] }),
   })

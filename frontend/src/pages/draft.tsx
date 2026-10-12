@@ -1,13 +1,16 @@
-import { useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import type { ColumnDef } from "@tanstack/react-table"
 import { ClockIcon, SparklesIcon, TrendingDownIcon, TriangleAlertIcon, Undo2Icon } from "lucide-react"
 import { Link } from "react-router"
+import { toast } from "sonner"
 
 import { CategoryProfile } from "@/components/category-profile"
 import { DataTable } from "@/components/data-table"
+import { PickEditor } from "@/components/pick-editor"
+import { AvailabilityText, PairPlan, PlaybookPanel } from "@/components/playbook-panel"
 import { PageError, PageLoading } from "@/components/page-state"
-import { categoryColumns, PlayerCell, ValueText } from "@/components/player-cells"
-import { matchesFilters, PlayerFilters, type PositionFilter } from "@/components/player-filters"
+import { categoryColumns, PlaybookTag, PlayerCell, ValueText } from "@/components/player-cells"
+import { matchesFilters, matchRank, PlayerFilters, type PositionFilter } from "@/components/player-filters"
 import { RosterList } from "@/components/roster-list"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,9 +18,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { useAddPick, useDraftState, usePlayers, useRemovePick, useUpdateSettings } from "@/hooks/queries"
-import type { AvailablePlayer, CategoryKey, DraftState, Player, SyncMode, SyncStatus } from "@/lib/api"
+import {
+  useAddPick,
+  useAddUnlistedPick,
+  useDraftState,
+  usePlaybook,
+  usePlayers,
+  useRemovePick,
+  useUpdateSettings,
+} from "@/hooks/queries"
+import type { AvailablePlayer, CategoryKey, DraftState, Player, PlaybookBranch, SyncMode, SyncStatus } from "@/lib/api"
 import { CATEGORY_LABEL, lastSeasonSummary, ordinal } from "@/lib/format"
+import { planBranch, playerTags, type PlayerTag } from "@/lib/playbook"
 import { cn } from "@/lib/utils"
 
 interface BoardRow {
@@ -33,6 +45,10 @@ export function DraftPage() {
   const removePick = useRemovePick()
   const [search, setSearch] = useState("")
   const [position, setPosition] = useState<PositionFilter>("ALL")
+  const [editing, setEditing] = useState<number | null>(null) // overall pick open in the editor
+  const [tab, setTab] = useState("available")
+  const playbookQuery = usePlaybook()
+  const addUnlisted = useAddUnlistedPick()
 
   const state = draft.data
   const byId = useMemo(() => new Map((players.data?.players ?? []).map((p) => [p.id, p])), [players.data])
@@ -40,8 +56,27 @@ export function DraftPage() {
   const manual = state?.settings.sync_mode !== "yahoo"
   const canPick = manual && !state?.status.complete
   const following = state?.status.my_following_pick ?? null
-  const draftPlayer = addPick.mutate
+  const { mutate: addPickMutate } = addPick
+  const { mutate: removePickMutate } = removePick
+  const recordPick = useCallback(
+    (player: Player) =>
+      addPickMutate(player.id, {
+        onSuccess: ({ overall }) =>
+          toast.success(`Recorded #${overall}: ${player.name}`, {
+            duration: 4000,
+            action: { label: "Undo", onClick: () => removePickMutate(overall) },
+          }),
+      }),
+    [addPickMutate, removePickMutate],
+  )
   const lastSeason = players.data?.last_season ?? ""
+  const playbook = playbookQuery.data?.available ? playbookQuery.data : null
+  const plan = state?.plan ?? null
+  const branch = useMemo(() => (playbook ? planBranch(playbook, plan) : null), [playbook, plan])
+  const tags = useMemo(
+    () => (playbook ? playerTags(playbook, branch, byId) : new Map<number, PlayerTag>()),
+    [playbook, branch, byId],
+  )
 
   const columns = useMemo<ColumnDef<BoardRow, number>[]>(() => {
     const cols: ColumnDef<BoardRow, number>[] = []
@@ -51,7 +86,7 @@ export function DraftPage() {
         header: "",
         enableSorting: false,
         cell: ({ row }) => (
-          <Button size="xs" variant="outline" onClick={() => draftPlayer(row.original.p.id)} title="Record this pick">
+          <Button size="xs" variant="outline" onClick={() => recordPick(row.original.p)} title="Record this pick">
             Draft
           </Button>
         ),
@@ -81,6 +116,7 @@ export function DraftPage() {
         enableSorting: false,
         cell: ({ row }) => {
           const p = row.original.p
+          const tag = tags.get(p.id)
           return (
             <PlayerCell
               name={p.name}
@@ -88,6 +124,7 @@ export function DraftPage() {
               positions={p.positions}
               injury={p.injury_status}
               title={lastSeasonSummary(p.last, lastSeason)}
+              extra={tag && <PlaybookTag {...tag} />}
             />
           )
         },
@@ -111,7 +148,7 @@ export function DraftPage() {
       ...categoryColumns<BoardRow>((r) => r.a.z, (r) => r.p.proj, punts),
     )
     return cols
-  }, [canPick, punts, following, draftPlayer, lastSeason])
+  }, [canPick, punts, following, recordPick, lastSeason, tags])
 
   if (draft.isPending || players.isPending) return <PageLoading />
   if (!state || draft.error) return <PageError error={draft.error} onRetry={() => draft.refetch()} />
@@ -129,9 +166,37 @@ export function DraftPage() {
   const togglePunt = (key: CategoryKey) =>
     updateSettings.mutate({ punts: punts.includes(key) ? punts.filter((k) => k !== key) : [...punts, key] })
   const lastPick = state.picks.at(-1)
+  // Enter in the search box records the best name match (then best fit) for the team on the clock.
+  const enterTarget =
+    canPick && search.trim()
+      ? rows.reduce<BoardRow | null>(
+          (best, r) => (!best || matchRank(r.p.name, search) < matchRank(best.p.name, search) ? r : best),
+          null,
+        )
+      : null
+  const recordEnterTarget = () => {
+    if (!enterTarget) return
+    recordPick(enterTarget.p)
+    setSearch("")
+  }
+  const recordUnlisted = () => {
+    const name = search.trim()
+    addUnlisted.mutate(
+      { name },
+      {
+        onSuccess: ({ overall }) =>
+          toast.success(`Recorded #${overall}: ${name} (unlisted)`, {
+            duration: 4000,
+            action: { label: "Undo", onClick: () => removePickMutate(overall) },
+          }),
+      },
+    )
+    setSearch("")
+  }
 
   return (
     <div className="flex flex-col gap-4">
+      {manual && <PickEditor overall={editing} onClose={() => setEditing(null)} state={state} byId={byId} />}
       <StatusBar
         state={state}
         onSyncMode={(mode) => updateSettings.mutate({ sync_mode: mode })}
@@ -144,13 +209,44 @@ export function DraftPage() {
       />
 
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <Tabs defaultValue="available" className="min-w-0">
+        <Tabs value={tab} onValueChange={setTab} className="min-w-0">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <TabsList>
               <TabsTrigger value="available">Best available</TabsTrigger>
+              {playbook && <TabsTrigger value="playbook">Playbook</TabsTrigger>}
               <TabsTrigger value="board">Draft board</TabsTrigger>
             </TabsList>
-            <PlayerFilters search={search} onSearch={setSearch} position={position} onPosition={setPosition} />
+            <PlayerFilters
+              search={search}
+              onSearch={setSearch}
+              position={position}
+              onPosition={setPosition}
+              onSubmit={canPick ? recordEnterTarget : undefined}
+              hint={
+                canPick && search.trim() ? (
+                  <span className="text-xs text-muted-foreground">
+                    {enterTarget ? (
+                      <>
+                        <kbd className="rounded border bg-muted px-1 font-sans">Enter</kbd> records{" "}
+                        <b className="text-foreground">{enterTarget.p.name}</b>
+                      </>
+                    ) : (
+                      <>
+                        No available player matches.{" "}
+                        <button
+                          type="button"
+                          onClick={recordUnlisted}
+                          className="font-medium text-primary underline-offset-4 hover:underline"
+                          title="For players the app has no projection for"
+                        >
+                          Record "{search.trim()}" as an unlisted player
+                        </button>
+                      </>
+                    )}
+                  </span>
+                ) : undefined
+              }
+            />
           </div>
           <TabsContent value="available" className="mt-2">
             <DataTable
@@ -163,8 +259,22 @@ export function DraftPage() {
               emptyMessage={search ? "No available players match." : "Everyone has been drafted."}
             />
           </TabsContent>
+          {playbook && (
+            <TabsContent value="playbook" className="mt-2">
+              <PlaybookPanel
+                playbook={playbook}
+                plan={plan}
+                branch={branch}
+                state={state}
+                byId={byId}
+                onDraft={canPick ? recordPick : undefined}
+                onTogglePunt={togglePunt}
+                onChooseBranch={(id) => updateSettings.mutate({ playbook_branch: id })}
+              />
+            </TabsContent>
+          )}
           <TabsContent value="board" className="mt-2">
-            <DraftBoard state={state} playerInfo={playerInfo} />
+            <DraftBoard state={state} playerInfo={playerInfo} onEditPick={manual ? setEditing : undefined} />
           </TabsContent>
         </Tabs>
 
@@ -187,6 +297,10 @@ export function DraftPage() {
             </Card>
           )}
 
+          {playbook && (
+            <PlaybookSummary branch={branch} state={state} onOpen={() => setTab("playbook")} />
+          )}
+
           <Recommendations
             state={state}
             rows={state.recommendations.flatMap((id) => {
@@ -194,7 +308,7 @@ export function DraftPage() {
               const p = byId.get(id)
               return a && p ? [{ a, p }] : []
             })}
-            onDraft={canPick ? draftPlayer : undefined}
+            onDraft={canPick ? recordPick : undefined}
           />
 
           {state.punt_suggestions.length > 0 && (
@@ -250,6 +364,7 @@ export function DraftPage() {
           <Card size="sm">
             <CardHeader>
               <CardTitle>Recent picks</CardTitle>
+              {manual && <CardDescription>Click a pick to fix it; the Draft board tab has every pick.</CardDescription>}
             </CardHeader>
             <CardContent>
               {state.picks.length === 0 ? (
@@ -262,14 +377,21 @@ export function DraftPage() {
                     .map((pick) => {
                       const team = state.teams.find((t) => t.slot === pick.team_slot)
                       return (
-                        <li key={pick.overall} className="flex items-baseline gap-2">
-                          <span className="tabular w-8 shrink-0 text-right text-xs text-muted-foreground">
-                            #{pick.overall}
-                          </span>
-                          <span className="truncate font-medium">{playerInfo(pick.player_id).name}</span>
-                          <span className={cn("ml-auto shrink-0 truncate text-xs text-muted-foreground", team?.is_mine && "font-medium text-primary")}>
-                            {team?.is_mine ? "You" : team?.name}
-                          </span>
+                        <li key={pick.overall}>
+                          <button
+                            type="button"
+                            disabled={!manual}
+                            onClick={() => setEditing(pick.overall)}
+                            className="-mx-1.5 flex w-[calc(100%+0.75rem)] items-baseline gap-2 rounded px-1.5 py-0.5 text-left enabled:hover:bg-muted"
+                          >
+                            <span className="tabular w-8 shrink-0 text-right text-xs text-muted-foreground">
+                              #{pick.overall}
+                            </span>
+                            <span className="truncate font-medium">{playerInfo(pick.player_id).name}</span>
+                            <span className={cn("ml-auto shrink-0 truncate text-xs text-muted-foreground", team?.is_mine && "font-medium text-primary")}>
+                              {team?.is_mine ? "You" : team?.name}
+                            </span>
+                          </button>
                         </li>
                       )
                     })}
@@ -407,7 +529,7 @@ function Recommendations({
 }: {
   state: DraftState
   rows: BoardRow[]
-  onDraft?: (playerId: number) => void
+  onDraft?: (player: Player) => void
 }) {
   const s = state.status
   return (
@@ -466,7 +588,7 @@ function Recommendations({
               </div>
             </div>
             {onDraft && (
-              <Button size="xs" onClick={() => onDraft(p.id)}>
+              <Button size="xs" onClick={() => onDraft(p)}>
                 Draft
               </Button>
             )}
@@ -497,9 +619,11 @@ function SlotSelect({ numTeams, onChange }: { numTeams: number; onChange: (slot:
 function DraftBoard({
   state,
   playerInfo,
+  onEditPick,
 }: {
   state: DraftState
   playerInfo: (id: number) => { name: string; detail: string }
+  onEditPick?: (overall: number) => void
 }) {
   const { num_teams: n, rounds } = state.settings
   const picks = new Map(state.picks.map((p) => [p.overall, p]))
@@ -536,19 +660,27 @@ function DraftBoard({
                   <td
                     key={t.slot}
                     className={cn(
-                      "border-b border-border/60 px-2 py-1.5 align-top",
+                      "border-b border-border/60 p-0 align-top",
                       t.is_mine && "bg-primary/5",
                       current && "outline-2 -outline-offset-2 outline-primary",
                     )}
                   >
-                    {info ? (
-                      <div className="leading-tight">
-                        <div className="truncate font-medium">{info.name}</div>
-                        <div className="text-muted-foreground">{info.detail}</div>
-                      </div>
-                    ) : (
-                      <span className="text-muted-foreground/50">#{overall}</span>
-                    )}
+                    <button
+                      type="button"
+                      disabled={!onEditPick}
+                      onClick={() => onEditPick?.(overall)}
+                      title={onEditPick ? `Edit pick #${overall}` : undefined}
+                      className="block h-full w-full px-2 py-1.5 text-left enabled:hover:bg-muted"
+                    >
+                      {info ? (
+                        <div className="leading-tight">
+                          <div className="truncate font-medium">{info.name}</div>
+                          <div className="text-muted-foreground">{info.detail}</div>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground/50">#{overall}</span>
+                      )}
+                    </button>
                   </td>
                 )
               })}
@@ -557,5 +689,49 @@ function DraftBoard({
         </tbody>
       </table>
     </div>
+  )
+}
+
+function PlaybookSummary({
+  branch,
+  state,
+  onOpen,
+}: {
+  branch: PlaybookBranch | null
+  state: DraftState
+  onOpen: () => void
+}) {
+  const plan = state.plan
+  if (!plan) return null
+  const names = new Map(plan.suggestions.map((s) => [s.player_id, s.name]))
+  const alert = plan.alerts.find((a) => a.level === "warn") ?? plan.alerts.find((a) => a.level === "plan")
+  return (
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between gap-2">
+          <span>{branch ? `Playbook · ${branch.id}: ${branch.name}` : "Playbook · your pick #9"}</span>
+          <Button size="xs" variant="ghost" onClick={onOpen}>
+            Open
+          </Button>
+        </CardTitle>
+        <CardDescription>{branch ? `Live plan for #${plan.next_pick ?? "—"}` : "The analysis's order for your first pick"}</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 text-sm">
+        {plan.pair && <PairPlan pair={plan.pair} names={names} />}
+        {alert && (
+          <p className={cn("flex gap-1.5 text-xs", alert.level === "warn" ? "text-warning" : "text-primary")}>
+            <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+            <span className="text-foreground">{alert.text}</span>
+          </p>
+        )}
+        {plan.suggestions.slice(0, 3).map((s) => (
+          <div key={s.player_id} className="flex items-baseline justify-between gap-2">
+            <span className="truncate font-medium">{s.name}</span>
+            <AvailabilityText avail={{ kind: s.availability }} />
+          </div>
+        ))}
+        {plan.suggestions.length === 0 && <p className="text-muted-foreground">No suggestions right now.</p>}
+      </CardContent>
+    </Card>
   )
 }

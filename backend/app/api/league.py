@@ -22,7 +22,7 @@ def league():
     return {
         "league_id": settings["league_id"] or YAHOO_LEAGUE_ID,
         "yahoo": settings.get("yahoo_league"),
-        "settings": {k: settings[k] for k in ("num_teams", "rounds", "my_slot", "punts", "value_mode", "sync_mode", "roster_positions")},
+        "settings": {k: settings[k] for k in ("num_teams", "rounds", "my_slot", "punts", "value_mode", "sync_mode", "roster_positions", "playbook_branch")},
         "teams": [t.model_dump() for t in teams],
         "synced_at": {
             "projections": settings.get("projections_synced_at"),
@@ -41,6 +41,7 @@ class SettingsIn(BaseModel):
     punts: list[str] | None = None
     value_mode: Literal["per_game", "total"] | None = None
     sync_mode: Literal["manual", "yahoo"] | None = None
+    playbook_branch: str | None = Field(None, pattern=r"^[A-Z]$")
 
 
 @router.put("/settings")

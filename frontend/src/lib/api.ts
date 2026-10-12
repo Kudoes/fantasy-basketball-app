@@ -52,6 +52,7 @@ export interface Settings {
   value_mode: ValueMode
   sync_mode: SyncMode
   roster_positions: string[]
+  playbook_branch: string | null
 }
 
 export interface SyncStatus {
@@ -107,6 +108,37 @@ export interface AvailablePlayer {
   hurts: CategoryKey[]
 }
 
+export type AvailabilityKind = "taken" | "falling" | "gone_soon" | "take_now" | "should_last" | "unknown"
+
+export interface PlanAlert {
+  level: "warn" | "info" | "plan"
+  text: string
+  action?: { kind: "punt"; cat: CategoryKey } | { kind: "branch"; id: string }
+}
+
+export interface PlanSuggestion {
+  player_id: number
+  name: string
+  score: number
+  fit: number
+  availability: AvailabilityKind
+  reasons: string[]
+  source: "target" | "later_target" | "engine"
+}
+
+export interface DraftPlan {
+  branch: { id: string; how: "manual" | "first_pick" | "closest" } | null
+  next_pick: number | null
+  following_pick: number | null
+  row_index: number | null
+  alerts: PlanAlert[]
+  suggestions: PlanSuggestion[]
+  pair: { now: number; now_pick: number; later: number; later_pick: number; later_odds: number } | null
+  centers: { have: number; need: number; by_pick: number; picks_left: number[]; urgency: string }[]
+  /** player id -> availability, for every playbook player */
+  availability: Record<string, { kind: AvailabilityKind; overall?: number; team?: string }>
+}
+
 export interface DraftState {
   status: DraftStatus
   picks: DraftPick[]
@@ -123,6 +155,7 @@ export interface DraftState {
   drafted_players: Record<string, { name: string; team: string | null; positions: string[] }>
   settings: Settings
   sync: SyncStatus
+  plan: DraftPlan | null
 }
 
 export interface LeagueTeam {
@@ -164,6 +197,48 @@ export interface YahooSyncResult {
 
 export type SettingsUpdate = Partial<Omit<Settings, "roster_positions">> & { league_id?: string }
 
+export interface PlaybookRound {
+  picks: number[]
+  targets: string[]
+  note: string
+}
+
+export interface PlaybookBranch {
+  id: string
+  anchor: string
+  name: string
+  tagline: string
+  punts: CategoryKey[]
+  optional_punts: CategoryKey[]
+  win: CategoryKey[]
+  swing: CategoryKey[]
+  warning: string
+  rounds: PlaybookRound[]
+  avoid: string[]
+  avoid_teams: string[]
+  avoid_note: string
+}
+
+export interface Playbook {
+  available: true
+  title: string
+  as_of: string
+  adp_note: string
+  summary: string
+  pick9_priority: { name: string; branch: string | null; note: string }[]
+  not_at_9: { name: string; branch: string; note: string } | null
+  center_rules: { by_pick: number; count: number }[]
+  branches: PlaybookBranch[]
+  late_targets: { name: string; why: string; builds: string }[]
+  il_stashes: { name: string; note: string }[]
+  fades: { name: string; why: string }[]
+  checks: string[]
+  tactics: string[]
+  /** playbook name -> player id */
+  ids: Record<string, number>
+  unmatched: string[]
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
@@ -193,7 +268,15 @@ export const api = {
   league: () => request<LeagueResponse>("/league"),
   updateSettings: (body: SettingsUpdate) => request<Partial<Settings>>("/settings", json("PUT", body)),
   addPick: (playerId: number) => request<{ overall: number }>("/draft/picks", json("POST", { player_id: playerId })),
-  removePick: (overall: number) => request<{ removed: number }>(`/draft/picks/${overall}`, json("DELETE")),
+  removePick: (overall: number, shift = false) =>
+    request<{ removed: number }>(`/draft/picks/${overall}${shift ? "?shift=true" : ""}`, json("DELETE")),
+  playbook: () => request<Playbook | { available: false }>("/playbook"),
+  addUnlistedPick: (name: string, overall?: number) =>
+    request<{ overall: number }>("/draft/picks", json("POST", { player_name: name, overall })),
+  setPick: (overall: number, playerId: number, insert = false) =>
+    request<{ overall: number }>("/draft/picks", json("POST", { player_id: playerId, overall, insert })),
+  replacePick: (overall: number, playerId: number) =>
+    request<{ overall: number }>(`/draft/picks/${overall}`, json("PUT", { player_id: playerId })),
   resetDraft: () => request<{ ok: boolean }>("/draft/reset", json("POST")),
   renameTeam: (slot: number, name: string) => request(`/teams/${slot}`, json("PUT", { name })),
   syncYahoo: () => request<YahooSyncResult>("/sync/yahoo", json("POST")),

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react"
 import type { ColumnDef } from "@tanstack/react-table"
 
 import { Badge } from "@/components/ui/badge"
@@ -27,18 +28,22 @@ export function PlayerCell({
   positions,
   injury,
   title,
+  extra,
 }: {
   name: string
   team: string | null
   positions: string[]
   injury?: string | null
   title?: string
+  /** Extra labels after the name, e.g. playbook tags. */
+  extra?: ReactNode
 }) {
   return (
     <div className="flex min-w-0 flex-col leading-tight" title={title}>
       <span className="flex items-center gap-1.5 font-medium whitespace-nowrap">
         {name}
         <InjuryBadge status={injury ?? null} />
+        {extra}
       </span>
       <span className="text-xs text-muted-foreground">
         {team ?? "FA"} · {positions.join("/") || "—"}
@@ -83,4 +88,19 @@ export function categoryColumns<T>(
       meta: { className: "w-16 text-right", title: punted ? `${cat.label} (punted)` : `Sort by ${cat.label} value` },
     }
   })
+}
+
+const TAG_STYLES = {
+  target: "bg-primary/12 text-primary",
+  avoid: "bg-negative/15 text-negative",
+  fade: "bg-negative/15 text-negative",
+  sleeper: "bg-positive/15 text-positive",
+} as const
+
+export function PlaybookTag({ kind, label, detail }: { kind: keyof typeof TAG_STYLES; label: string; detail: string }) {
+  return (
+    <Badge variant="secondary" title={`Playbook: ${detail}`} className={cn("h-4 rounded px-1 text-[10px] font-semibold", TAG_STYLES[kind])}>
+      {label}
+    </Badge>
+  )
 }

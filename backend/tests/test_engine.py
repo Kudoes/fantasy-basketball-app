@@ -8,6 +8,7 @@ from app.engine.draft import (
     assign_roster,
     build_draft_state,
     picks_for_slot,
+    shift_picks,
     slot_for_pick,
 )
 from app.engine.valuation import compute_values
@@ -53,6 +54,19 @@ def test_snake_order():
     assert picks_for_slot(1, 12, 4) == [1, 24, 25, 48]
     assert picks_for_slot(12, 12, 3) == [12, 13, 36]
     assert picks_for_slot(5, 10, 3) == [5, 16, 25]
+
+
+def test_shift_picks_moves_later_picks_and_their_teams():
+    picks = [Pick(o, slot_for_pick(o, 12), 100 + o) for o in (11, 12, 13, 14)]
+    later = {p.overall: p for p in shift_picks(picks, 12, +1, 12)}
+    assert sorted(later) == [11, 13, 14, 15]
+    assert later[13].player_id == 112 and later[13].team_slot == 12  # #13 is slot 12 in a snake
+    assert later[15].player_id == 114 and later[15].team_slot == 10
+    without_12 = [p for p in picks if p.overall != 12]  # pick #12 removed, then the gap is closed
+    earlier = {p.overall: p for p in shift_picks(without_12, 13, -1, 12)}
+    assert sorted(earlier) == [11, 12, 13]
+    assert earlier[12].player_id == 113 and earlier[12].team_slot == 12
+    assert earlier[13].player_id == 114 and earlier[13].team_slot == 12
 
 
 # --- Valuation --------------------------------------------------------------------
@@ -118,6 +132,14 @@ def test_draft_status_and_turn_tracking():
     assert s["current_pick"] == 5 and s["on_clock_slot"] == 5
     assert s["is_my_turn"] and s["my_next_pick"] == 5 and s["my_following_pick"] == 20
     assert not {1, 2, 3, 4} & {r["player_id"] for r in state["available"]}
+
+
+def test_removed_pick_leaves_a_hole_without_moving_the_clock():
+    stats = make_stats()
+    picks = [Pick(o, slot_for_pick(o, 12), o) for o in (1, 2, 4, 5)]  # #3 was removed
+    s = build_draft_state(stats, {}, {}, picks, config())["status"]
+    assert s["current_pick"] == 6 and s["on_clock_slot"] == 6
+    assert s["my_next_pick"] == 20  # slot 5's #5 is taken, so its next is #20
 
 
 def test_team_profiles_sum_static_scores():

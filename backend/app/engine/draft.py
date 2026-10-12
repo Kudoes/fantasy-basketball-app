@@ -66,6 +66,21 @@ def picks_for_slot(slot: int, num_teams: int, rounds: int) -> list[int]:
     ]
 
 
+def shift_picks(picks: Sequence[Pick], start: int, delta: int, num_teams: int) -> list[Pick]:
+    """Moves every pick at or after `start` by `delta` overall spots, re-deriving its team from snake order.
+
+    Used to fix a missed pick (delta=+1) or a duplicate one (delta=-1) without re-entering the rest.
+    """
+    shifted = []
+    for p in picks:
+        if p.overall >= start:
+            overall = p.overall + delta
+            shifted.append(Pick(overall, slot_for_pick(overall, num_teams), p.player_id, p.source))
+        else:
+            shifted.append(p)
+    return shifted
+
+
 def assign_roster(players: Sequence[tuple[int, Sequence[str]]], slots: Sequence[str]) -> list[dict]:
     """Fills starting slots with a maximum bipartite matching; everyone else goes to the bench."""
     slots = [s for s in slots if s not in NON_ROSTER_SLOTS]
@@ -115,7 +130,11 @@ def build_draft_state(
 
     # --- Status -----------------------------------------------------------------
     made = {p.overall for p in picks}
-    current = next((o for o in range(1, total_picks + 1) if o not in made), None)
+    # The clock follows the latest recorded pick; a hole left by removing an earlier pick stays a hole
+    # until it's filled from the board, so live entry never lands in it by accident.
+    current = max(made, default=0) + 1
+    if current > total_picks:
+        current = None
     status: dict = {
         "total_picks": total_picks,
         "picks_made": len(picks),

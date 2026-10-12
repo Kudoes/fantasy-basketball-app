@@ -85,6 +85,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "punts": [],
     "value_mode": "per_game",  # "per_game" | "total"
     "sync_mode": "manual",  # "manual" | "yahoo"
+    "playbook_branch": None,  # branch id chosen by hand; otherwise it follows your first pick
     "roster_positions": ["PG", "SG", "G", "SF", "PF", "F", "C", "C", "Util", "Util", "BN", "BN", "BN"],
 }
 
