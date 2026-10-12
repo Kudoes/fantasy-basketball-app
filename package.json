@@ -1,0 +1,15 @@
+{
+  "name": "fantasy-basketball-app",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "cd backend && .venv/bin/uvicorn app.main:app --reload --port 8000",
+    "dev:web": "npm --prefix frontend run dev",
+    "sync": "cd backend && .venv/bin/python -m scripts.sync_all",
+    "yahoo:login": "cd backend && .venv/bin/python -m scripts.yahoo_login",
+    "test": "cd backend && .venv/bin/python -m pytest -q"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

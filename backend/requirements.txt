@@ -1,0 +1,10 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+sqlmodel>=0.0.22
+pandas>=2.2
+numpy>=2.0
+httpx>=0.27
+nba_api>=1.11
+yfpy>=17.0
+python-dotenv>=1.0
+pytest>=8.0
